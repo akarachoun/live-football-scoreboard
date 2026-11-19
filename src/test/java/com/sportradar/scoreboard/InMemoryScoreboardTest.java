@@ -2,6 +2,7 @@ package com.sportradar.scoreboard;
 
 import com.sportradar.scoreboard.exception.InvalidScoreException;
 import com.sportradar.scoreboard.exception.MatchNotFoundException;
+import com.sportradar.scoreboard.exception.NoScoreUpdateToUndoException;
 import com.sportradar.scoreboard.exception.TeamAlreadyPlayingException;
 import com.sportradar.scoreboard.model.Match;
 import com.sportradar.scoreboard.model.MatchId;
@@ -195,5 +196,60 @@ class InMemoryScoreboardTest {
         List<Match> summary = scoreboard.getSummary();
         assertThat(summary).hasSize(1);
         assertThat(summary.getFirst().homeScore()).isBetween(1, threads);
+    }
+
+    @Nested
+    @DisplayName("Undo Last Score Update")
+    class UndoScoreUpdateTests {
+
+        @Test
+        void shouldRevertToPreviousScoreAndPreserveStartSequence() {
+            MatchId match1 = scoreboard.startMatch("Mexico", "Canada");
+            MatchId match2 = scoreboard.startMatch("Spain", "Brazil");
+
+            scoreboard.updateScore(match1, 1, 0);
+            scoreboard.updateScore(match1, 2, 0);
+            scoreboard.updateScore(match2, 1, 0);
+
+            // VAR cancels Mexico's second goal -> both matches are 1-0, match2 started later so it stays first
+            scoreboard.undoLastScoreUpdate(match1);
+
+            assertThat(scoreboard.getSummary()).containsExactly(
+                    new Match(match2, "Spain", "Brazil", 1, 0),
+                    new Match(match1, "Mexico", "Canada", 1, 0)
+            );
+        }
+
+        @Test
+        void shouldSupportMultipleConsecutiveUndosBackToInitialZeroZero() {
+            MatchId id = scoreboard.startMatch("Germany", "France");
+            scoreboard.updateScore(id, 1, 0);
+            scoreboard.updateScore(id, 1, 1);
+
+            scoreboard.undoLastScoreUpdate(id);
+            assertThat(scoreboard.getSummary())
+                    .containsExactly(new Match(id, "Germany", "France", 1, 0));
+
+            scoreboard.undoLastScoreUpdate(id);
+            assertThat(scoreboard.getSummary())
+                    .containsExactly(new Match(id, "Germany", "France", 0, 0));
+
+            assertThatThrownBy(() -> scoreboard.undoLastScoreUpdate(id))
+                    .isInstanceOf(NoScoreUpdateToUndoException.class);
+        }
+
+        @Test
+        void shouldThrowWhenUndoingMatchWithNoUpdates() {
+            MatchId id = scoreboard.startMatch("Argentina", "Australia");
+
+            assertThatThrownBy(() -> scoreboard.undoLastScoreUpdate(id))
+                    .isInstanceOf(NoScoreUpdateToUndoException.class);
+        }
+
+        @Test
+        void shouldThrowWhenUndoingUnknownMatch() {
+            assertThatThrownBy(() -> scoreboard.undoLastScoreUpdate(MatchId.generate()))
+                    .isInstanceOf(MatchNotFoundException.class);
+        }
     }
 }

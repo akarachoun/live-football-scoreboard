@@ -2,11 +2,14 @@ package com.sportradar.scoreboard;
 
 import com.sportradar.scoreboard.exception.InvalidScoreException;
 import com.sportradar.scoreboard.exception.MatchNotFoundException;
+import com.sportradar.scoreboard.exception.NoScoreUpdateToUndoException;
 import com.sportradar.scoreboard.exception.TeamAlreadyPlayingException;
 import com.sportradar.scoreboard.model.Match;
 import com.sportradar.scoreboard.model.MatchId;
 
+import java.util.ArrayDeque;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -58,7 +61,10 @@ public class InMemoryScoreboard implements Scoreboard {
             Match initialMatch = new Match(matchId, normalizedHome, normalizedAway, 0, 0);
             long sequence = sequenceGenerator.incrementAndGet();
 
-            activeMatches.put(matchId, new MatchEntry(initialMatch, sequence));
+            Deque<Score> history = new ArrayDeque<>();
+            history.push(new Score(0, 0));
+
+            activeMatches.put(matchId, new MatchEntry(initialMatch, sequence, history));
             activeTeams.add(homeKey);
             activeTeams.add(awayKey);
 
@@ -91,7 +97,42 @@ public class InMemoryScoreboard implements Scoreboard {
                     awayScore
             );
 
-            activeMatches.put(matchId, new MatchEntry(updated, existingEntry.sequenceNumber()));
+            existingEntry.scoreHistory().push(new Score(homeScore, awayScore));
+            activeMatches.put(matchId, new MatchEntry(updated, existingEntry.sequenceNumber(), existingEntry.scoreHistory()));
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    @Override
+    public void undoLastScoreUpdate(MatchId matchId) {
+        Objects.requireNonNull(matchId, "MatchId must not be null");
+
+        lock.writeLock().lock();
+        try {
+            MatchEntry existingEntry = activeMatches.get(matchId);
+            if (existingEntry == null) {
+                throw new MatchNotFoundException(matchId);
+            }
+
+            Deque<Score> history = existingEntry.scoreHistory();
+            if (history.size() <= 1) {
+                throw new NoScoreUpdateToUndoException(matchId);
+            }
+
+            history.pop();
+            Score previousScore = history.element();
+            Match current = existingEntry.currentMatch();
+
+            Match reverted = new Match(
+                    current.id(),
+                    current.homeTeam(),
+                    current.awayTeam(),
+                    previousScore.homeScore(),
+                    previousScore.awayScore()
+            );
+
+            activeMatches.put(matchId, new MatchEntry(reverted, existingEntry.sequenceNumber(), history));
         } finally {
             lock.writeLock().unlock();
         }
@@ -140,6 +181,9 @@ public class InMemoryScoreboard implements Scoreboard {
         return teamName.toLowerCase(Locale.ROOT);
     }
 
-    private record MatchEntry(Match currentMatch, long sequenceNumber) {
+    private record Score(int homeScore, int awayScore) {
+    }
+
+    private record MatchEntry(Match currentMatch, long sequenceNumber, Deque<Score> scoreHistory) {
     }
 }

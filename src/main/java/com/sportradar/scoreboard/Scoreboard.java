@@ -1,5 +1,7 @@
 package com.sportradar.scoreboard;
 
+import com.sportradar.scoreboard.exception.MatchNotFoundException;
+import com.sportradar.scoreboard.exception.NoScoreUpdateToUndoException;
 import com.sportradar.scoreboard.model.Match;
 import com.sportradar.scoreboard.model.MatchId;
 
@@ -35,6 +37,15 @@ public interface Scoreboard {
      * @param awayScore new away team score (must be >= 0)
      */
     void updateScore(MatchId matchId, int homeScore, int awayScore);
+
+    /**
+     * Reverts the score of an active match to its state prior to the last score update.
+     *
+     * @param matchId identifier of the active match
+     * @throws MatchNotFoundException       if the match is not active
+     * @throws NoScoreUpdateToUndoException if no score updates can be undone
+     */
+    void undoLastScoreUpdate(MatchId matchId);
 
     /**
      * Finishes an active match and removes it from the scoreboard.
